@@ -1,0 +1,1 @@
+C:\Users\bette\OneDrive\Desktop\PDS\PDS_laboratories\RUST\Lab01\target\debug\Lab01.exe: C:\Users\bette\OneDrive\Desktop\PDS\PDS_laboratories\RUST\Lab01\src\cli.rs C:\Users\bette\OneDrive\Desktop\PDS\PDS_laboratories\RUST\Lab01\src\io.rs C:\Users\bette\OneDrive\Desktop\PDS\PDS_laboratories\RUST\Lab01\src\main.rs
