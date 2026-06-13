@@ -9,36 +9,55 @@
 
 use std::sync::WaitTimeoutResult;
 use std::time::Duration;
+use std::sync::Condvar;
+use std::sync::Mutex;
 
-pub struct WaitGroup {}
+pub struct WaitGroup {
+    operation_counter : Mutex<usize>,
+    cvar : Condvar
+}
 
 impl WaitGroup {
     pub fn new() -> Self {
-        todo!("Implementare WaitGroup::new")
-    }
+       Self {
+           operation_counter : Mutex::new(0),
+           cvar : Condvar::new()
+       }
+    }    
 
     /// Incrementa di `delta` il numero di operazioni pendenti. Può essere
     /// chiamato in qualunque momento, anche da thread già in attesa.
     pub fn increment(&self, _delta: usize) {
-        todo!("Implementare WaitGroup::increment")
+        let mut counter = self.operation_counter.lock().unwrap();
+        *counter = counter.checked_add(_delta).expect("counter overflow");        
     }
 
     /// Decrementa di uno il numero di operazioni pendenti. Quando il contatore
     /// raggiunge zero, tutti i thread in attesa vengono sbloccati. Decrementare
     /// un contatore già a zero deve causare panico.
     pub fn decrement(&self) {
-        todo!("Implementare WaitGroup::decrement")
+        let mut counter = self.operation_counter.lock().unwrap();
+        if *counter == 0 {
+            panic!("decrement su contatore a zero");
+        }
+        *counter -= 1;
+        if *counter == 0 {
+            self.cvar.notify_all();
+        }
     }
 
     /// Blocca il chiamante senza consumare cicli di CPU finché il contatore
     /// non raggiunge zero.
     pub fn wait(&self) {
-        todo!("Implementare WaitGroup::wait")
+        let counter = self.operation_counter.lock().unwrap();
+        let _a = self.cvar.wait_while(counter, |c| {*c != 0}).unwrap();
     }
 
     /// Analogo a `wait`, ma con un timeout massimo.
     pub fn wait_timeout(&self, _d: Duration) -> WaitTimeoutResult {
-        todo!("Implementare WaitGroup::wait_timeout")
+        let counter = self.operation_counter.lock().unwrap();
+        let (_n,r) = self.cvar.wait_timeout_while(counter, _d, |c| {*c != 0}).unwrap();
+        r
     }
 }
 
