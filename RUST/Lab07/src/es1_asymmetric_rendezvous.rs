@@ -7,23 +7,78 @@
 //!
 //! Vedi il file `Lab7.md` per la specifica completa.
 
-use std::marker::PhantomData;
+use std::sync::{Arc, Condvar, Mutex};
+
+enum RendezvousState<Req, Resp> {
+    Initial,
+    Request(Req),
+    Processing,
+    Terminated(Option<Resp>),
+}
+
+impl<Req, Resp> RendezvousState<Req, Resp> {
+    fn is_terminated(&self) -> bool {
+        matches!(self, RendezvousState::Terminated(_))
+    }
+
+    fn terminate(&mut self) {
+        match self {
+            RendezvousState::Terminated(_) => {}, // already terminated, do nothing, blanket-replacing it with None would lose the response if it was there
+            _ => *self = RendezvousState::Terminated(None), // transition to Terminated with None if not already terminated
+        }
+    }
+
+    fn take_resp(&mut self) -> Option<Resp> {
+        match std::mem::replace(self, RendezvousState::Terminated(None)) {
+            RendezvousState::Terminated(r) => r,
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
+
+    fn take_req(&mut self) -> Option<Req> {
+        match std::mem::replace(self, RendezvousState::Processing) {
+            RendezvousState::Request(r) => Some(r),
+            other => {
+                *self = other;
+                None
+            }
+        }
+    }
+}
+
+
+pub struct Rendezvous<Req: Send, Resp: Send> {
+    state: Mutex<RendezvousState<Req, Resp>>,
+    cvar: Condvar,
+}
 
 /// Estremo "cliente" del rendezvous. Possiede il metodo per inviare la richiesta
 /// e ricevere la risposta. Mono-uso: il metodo consuma `self`.
 pub struct ClientEnd<Req: Send, Resp: Send> {
-    _marker: PhantomData<(Req, Resp)>,
+    client: Arc<Rendezvous<Req, Resp>>,
 }
 
 /// Estremo "servitore" del rendezvous. Possiede il metodo per ricevere la
 /// richiesta, elaborarla con un handler e restituire la risposta al cliente.
 pub struct ServerEnd<Req: Send, Resp: Send> {
-    _marker: PhantomData<(Req, Resp)>,
+    server: Arc<Rendezvous<Req, Resp>>,
 }
 
 /// Crea una nuova coppia di estremi di rendezvous.
 pub fn make_rendezvous<Req: Send, Resp: Send>() -> (ClientEnd<Req, Resp>, ServerEnd<Req, Resp>) {
-    todo!("Implementare make_rendezvous")
+    let inner = Arc::new(Rendezvous {
+        state: Mutex::new(RendezvousState::Initial),
+        cvar: Condvar::new(),
+    });
+    (
+        ClientEnd {
+            client: Arc::clone(&inner),
+        },
+        ServerEnd { server: inner },
+    )
 }
 
 impl<Req: Send, Resp: Send> ClientEnd<Req, Resp> {
@@ -32,7 +87,14 @@ impl<Req: Send, Resp: Send> ClientEnd<Req, Resp> {
     /// Restituisce `Some(resp)` in caso di successo, `None` se il `ServerEnd`
     /// è stato distrutto senza aver invocato `accept`.
     pub fn request(self, _req: Req) -> Option<Resp> {
-        todo!("Implementare ClientEnd::request")
+        let mut state = self.client.state.lock().unwrap();
+        *state = RendezvousState::Request(_req);
+        self.client.cvar.notify_all();
+
+        let mut s = self.client.cvar.wait_while(state, |s| !s.is_terminated()).unwrap();
+        let result = s.take_resp();
+        self.client.cvar.notify_all();
+        result
     }
 }
 
@@ -45,19 +107,40 @@ impl<Req: Send, Resp: Send> ServerEnd<Req, Resp> {
     where
         F: FnOnce(Req) -> Resp,
     {
-        todo!("Implementare ServerEnd::accept")
+        
+        let req = {
+            let state = self.server.state.lock().unwrap();
+            let mut s = self.server.cvar.wait_while(state, |s| !matches!(s, RendezvousState::Request(_))).unwrap();
+            match s.take_req() {
+                Some(r) => r,
+                None => {
+                    self.server.cvar.notify_all();
+                    return None;
+                }
+            }
+        };
+        let resp = _handler(req);
+
+        let mut state = self.server.state.lock().unwrap();
+        *state = RendezvousState::Terminated(Some(resp));
+        self.server.cvar.notify_all();
+        Some(())
     }
 }
 
 impl<Req: Send, Resp: Send> Drop for ClientEnd<Req, Resp> {
     fn drop(&mut self) {
-        todo!("Implementare Drop per ClientEnd")
+        let mut state = self.client.state.lock().unwrap();
+        state.terminate();
+        self.client.cvar.notify_all();
     }
 }
 
 impl<Req: Send, Resp: Send> Drop for ServerEnd<Req, Resp> {
     fn drop(&mut self) {
-        todo!("Implementare Drop per ServerEnd")
+        let mut state = self.server.state.lock().unwrap();
+        state.terminate();
+        self.server.cvar.notify_all();
     }
 }
 
